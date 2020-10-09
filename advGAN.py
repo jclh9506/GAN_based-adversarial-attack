@@ -5,8 +5,24 @@ import models
 import torch.nn.functional as F
 import torchvision
 import os
+import torchvision.transforms as transforms
+from torch.autograd import Variable
 
-models_path = './models/'
+
+def flat_trans(x):
+    x.resize_(28*28)
+    return x
+
+# 概率向量重排序函数
+def probability_vector_rerank(orig_vector, target):
+    prob_vector = orig_vector.clone()
+    prob_vector[ : , target] = 3
+    return F.softmax(prob_vector, dim = 1)
+
+
+# def cross_entro(prob_model, target_rank):
+
+models_path = './models5/'
 
 
 # custom weights initialization called on netG and netD
@@ -46,9 +62,13 @@ class AdvGAN_Attack:
 
         # initialize optimizers
         self.optimizer_G = torch.optim.Adam(self.netG.parameters(),
-                                            lr=0.001)
+                                            lr=0.5)
         self.optimizer_D = torch.optim.Adam(self.netDisc.parameters(),
-                                            lr=0.001)
+                                            lr=0.5)
+        # self.optimizer_G = torch.optim.SGD(self.netG.parameters(),
+        #                                     lr=0.1, momentum=0.9)
+        # self.optimizer_D = torch.optim.SGD(self.netDisc.parameters(),
+        #                                     lr=0.1,momentum=0.9)
 
         if not os.path.exists(models_path):
             os.makedirs(models_path)
@@ -57,7 +77,9 @@ class AdvGAN_Attack:
         # optimize D
         for i in range(1):
             perturbation = self.netG(x)
-
+            # modify step3
+            orig_model = self.model(x)
+            # print(F.softmax(orig_model, 1))
             # add a clipping trick
             adv_images = torch.clamp(perturbation, -0.3, 0.3) + x
             adv_images = torch.clamp(adv_images, self.box_min, self.box_max)
@@ -85,19 +107,37 @@ class AdvGAN_Attack:
             # calculate perturbation norm
             C = 0.1
             loss_perturb = torch.mean(torch.norm(perturbation.view(perturbation.shape[0], -1), 2, dim=1))
-            # loss_perturb = torch.max(loss_perturb - C, torch.zeros(1, device=self.device))
+            # modify step1
+            loss_perturb = torch.max(loss_perturb - C, torch.zeros(1, device=self.device))
 
+            # print(adv_images.view(2,784).shape)
+            # print(mnist_transform(adv_images.data).shape)
             # cal adv loss
             logits_model = self.model(adv_images)
-            probs_model = F.softmax(logits_model, dim=1)
-            onehot_labels = torch.eye(self.model_num_labels, device=self.device)[labels]
-
-            # C&W loss function
-            real = torch.sum(onehot_labels * probs_model, dim=1)
-            other, _ = torch.max((1 - onehot_labels) * probs_model - onehot_labels * 10000, dim=1)
-            zeros = torch.zeros_like(other)
-            loss_adv = torch.max(real - other, zeros)
-            loss_adv = torch.sum(loss_adv)
+            # print('logits_model:',logits_model)
+            probs_model = F.softmax(logits_model, dim=-1)
+            print(probs_model[0].sum(),probs_model[1])
+            # print('probs_model:', probs_model.shape)
+            # modify step2
+            # onehot_labels = torch.eye(self.model_num_labels, device=self.device)[labels]
+            # # print('labels:',labels)
+            # # print('onehot_labels',onehot_labels)
+            # # C&W loss function
+            # real = torch.sum(onehot_labels * probs_model, dim=1)
+            # # print('real', real)
+            # other, _ = torch.max((1 - onehot_labels) * probs_model - onehot_labels * 10000, dim=1)
+            # zeros = torch.zeros_like(other)
+            # loss_adv = torch.max(real - other, zeros)
+            # # print('Before',loss_adv.shape)
+            # loss_adv = torch.sum(loss_adv)
+            # print('After', loss_adv.shape)
+            # print(orig_model[0])
+            # print(F.softmax(orig_model, 1)[0])
+            target_rank = probability_vector_rerank(F.softmax(orig_model, 1), 4)
+            # print(target_rank[0])
+            # print(probs_model.shape, target_rank.shape)
+            # print(labels)
+            loss_adv = F.binary_cross_entropy(probs_model, target_rank.detach())
 
             # maximize cross_entropy loss
             # loss_adv = -F.mse_loss(logits_model, onehot_labels)
@@ -114,16 +154,24 @@ class AdvGAN_Attack:
     def train(self, train_dataloader, epochs):
         for epoch in range(1, epochs+1):
 
-            if epoch == 50:
+            if epoch == 40:
                 self.optimizer_G = torch.optim.Adam(self.netG.parameters(),
-                                                    lr=0.0001)
+                                                    lr=0.1)
                 self.optimizer_D = torch.optim.Adam(self.netDisc.parameters(),
-                                                    lr=0.0001)
-            if epoch == 80:
+                                                    lr=0.1)
+                # self.optimizer_G = torch.optim.SGD(self.netG.parameters(),
+                #                                    lr=0.01, momentum=0.9)
+                # self.optimizer_D = torch.optim.SGD(self.netDisc.parameters(),
+                #                                    lr=0.01, momentum=0.9)
+            if epoch == 800:
                 self.optimizer_G = torch.optim.Adam(self.netG.parameters(),
-                                                    lr=0.00001)
+                                                    lr=0.01)
                 self.optimizer_D = torch.optim.Adam(self.netDisc.parameters(),
-                                                    lr=0.00001)
+                                                    lr=0.01)
+                # self.optimizer_G = torch.optim.SGD(self.netG.parameters(),
+                #                                    lr=0.001, momentum=0.9)
+                # self.optimizer_D = torch.optim.SGD(self.netDisc.parameters(),
+                #                                    lr=0.001, momentum=0.9)
             loss_D_sum = 0
             loss_G_fake_sum = 0
             loss_perturb_sum = 0
